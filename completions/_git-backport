@@ -10,14 +10,33 @@ if [ -n "$ZSH_VERSION" ]; then
         branches=(${(f)"$(git branch -r --list "$upstream_remote/*" 2>/dev/null \
             | sed "s|^ *$upstream_remote/||" \
             | grep -v '^HEAD ')"})
-        _describe 'upstream branch' branches
+
+        if [[ "${words[CURRENT-1]}" == "--base" ]]; then
+            _alternative 'refs:ref:__git_refs'
+            return
+        fi
+
+        _arguments \
+            '--base[Parent of the first commit to backport]:base ref:__git_refs' \
+            '*:upstream branch:_describe "upstream branch" branches'
     }
 else
     # Bash completion
     _git_backport() {
         local cur="${COMP_WORDS[COMP_CWORD]}"
+        local prev="${COMP_WORDS[COMP_CWORD-1]}"
         local upstream_remote
         upstream_remote=$(git fork get upstream.remote 2>/dev/null) || return
+
+        if [[ "$prev" == "--base" ]]; then
+            __gitcomp_nl "$(__git_refs)"
+            return
+        fi
+
+        if [[ "$cur" == --* ]]; then
+            COMPREPLY=($(compgen -W "--base" -- "$cur"))
+            return
+        fi
 
         local branches
         branches=$(git branch -r --list "$upstream_remote/*" 2>/dev/null \
