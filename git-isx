@@ -23,29 +23,19 @@ function get_git_directory_name() {
 }
 
 function get_base_branch() {
-	# Determine base branch from the remote-tracking branch of the local default branch
-	local BASE_REMOTE
+	local BRANCH_NAME="$1"
 
-	# Prefer upstream if it exists, otherwise use origin
-	if git remote | grep -q '^upstream$'
+	local BASE_BRANCH_NAME
+	BASE_BRANCH_NAME="$(git fork closest-upstream-branch-name "$BRANCH_NAME" 2>/dev/null || true)"
+	if [ -z "$BASE_BRANCH_NAME" ]
 	then
-		BASE_REMOTE="upstream"
-	else
-		BASE_REMOTE="origin"
+		abort "Could not infer the base branch for '$BRANCH_NAME'. Make sure 'git fork' is set up and the branch is based on a known upstream branch."
 	fi
 
-	# Ensure the base remote has been fetched
-	git fetch "$BASE_REMOTE" >/dev/null 2>&1 || true
+	local UPSTREAM_REMOTE
+	UPSTREAM_REMOTE="$(git fork get upstream.remote)"
 
-	# Get the default branch from the remote
-	if ! BASE_BRANCH=$(git rev-parse --abbrev-ref "$BASE_REMOTE/HEAD" 2>/dev/null)
-	then
-		# Maybe the remote HEAD was not set yet, try to set it automatically
-		git remote set-head -a "$BASE_REMOTE" 1>&2
-		BASE_BRANCH=$(git rev-parse --abbrev-ref "$BASE_REMOTE/HEAD")
-	fi
-
-	echo "$BASE_BRANCH"
+	echo "$UPSTREAM_REMOTE/$BASE_BRANCH_NAME"
 }
 
 function run_on_isx_remote() {
@@ -66,13 +56,12 @@ function run_on_isx_remote() {
 
 function push_to_isx_remote() {
 	local REMOTE_NAME="$1"
-	local BRANCH_NAME="$2"
-	local REMOTE_DEFAULT_BRANCH="$3"
+	local REMOTE_BRANCH="$2"
 
 	local LOCAL_SHA
 	LOCAL_SHA=$(git rev-parse HEAD)
 	local REMOTE_SHA
-	REMOTE_SHA=$(git rev-parse "$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH" 2>/dev/null || echo "")
+	REMOTE_SHA=$(git rev-parse "$REMOTE_NAME/$REMOTE_BRANCH" 2>/dev/null || echo "")
 
 	if [ "$LOCAL_SHA" != "$REMOTE_SHA" ]
 	then
@@ -86,29 +75,24 @@ function push_to_isx_remote() {
 			abort "Refusing to push to avoid losing uncommitted work. Commit or discard changes on the instance first."
 		fi
 
-		log "Pushing to '$REMOTE_NAME/$BRANCH_NAME'..."
-		git push --force "$REMOTE_NAME" "HEAD:refs/heads/$BRANCH_NAME" \
-			|| abort "Error pushing to '$REMOTE_NAME/$BRANCH_NAME'."
+		log "Pushing to '$REMOTE_NAME/$REMOTE_BRANCH'..."
+		git push --force "$REMOTE_NAME" "HEAD:refs/heads/$REMOTE_BRANCH" \
+			|| abort "Error pushing to '$REMOTE_NAME/$REMOTE_BRANCH'."
 
-		log "Resetting '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH' to '$BRANCH_NAME'..."
-		run_on_isx_remote "$REMOTE_NAME" "git reset --hard refs/heads/$BRANCH_NAME" \
+		log "Resetting '$REMOTE_NAME' working tree to '$REMOTE_BRANCH'..."
+		run_on_isx_remote "$REMOTE_NAME" "git checkout -f $REMOTE_BRANCH" \
 			|| abort "Error resetting working tree on '$REMOTE_NAME'."
 	else
-		log "Remote '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH' is already up to date, skipping push."
+		log "Remote '$REMOTE_NAME/$REMOTE_BRANCH' is already up to date, skipping push."
 	fi
 }
 
-function get_remote_default_branch() {
+function get_remote_checked_out_branch() {
 	local REMOTE_NAME="$1"
-	local DEFAULT_BRANCH
-
-	if ! DEFAULT_BRANCH=$(git rev-parse --abbrev-ref "$REMOTE_NAME/HEAD" 2>/dev/null)
-	then
-		git remote set-head -a "$REMOTE_NAME" 1>&2
-		DEFAULT_BRANCH=$(git rev-parse --abbrev-ref "$REMOTE_NAME/HEAD")
-	fi
-
-	echo "${DEFAULT_BRANCH#"$REMOTE_NAME/"}"
+	local BRANCH
+	BRANCH=$(run_on_isx_remote "$REMOTE_NAME" "git symbolic-ref --short HEAD") \
+		|| abort "Could not determine the checked-out branch on '$REMOTE_NAME'. Is the instance in detached HEAD state?"
+	echo "$BRANCH"
 }
 
 function resolve_remote_name() {
@@ -140,8 +124,8 @@ function get_branch() {
 	log "Fetching remote '$REMOTE_NAME'..."
 	git fetch -p "$REMOTE_NAME"
 
-	local REMOTE_DEFAULT_BRANCH
-	REMOTE_DEFAULT_BRANCH="$(get_remote_default_branch "$REMOTE_NAME")"
+	local REMOTE_BRANCH
+	REMOTE_BRANCH="$(get_remote_checked_out_branch "$REMOTE_NAME")"
 
 	if git rev-parse --quiet --verify "refs/heads/$BRANCH_NAME" >/dev/null 2>&1
 	then
@@ -151,17 +135,14 @@ function get_branch() {
 		git switch "$BRANCH_NAME" \
 			|| abort "Error while checking out branch '$BRANCH_NAME'."
 
-		# Reset to the remote's default branch
-		git fetch "$REMOTE_NAME" "$REMOTE_DEFAULT_BRANCH":refs/remotes/"$REMOTE_NAME"/"$REMOTE_DEFAULT_BRANCH" \
-			|| abort "Error fetching '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH'."
+		# Reset to the remote's checked-out branch
+		log "Resetting to '$REMOTE_NAME/$REMOTE_BRANCH'..."
+		git reset --hard "$REMOTE_NAME/$REMOTE_BRANCH" \
+			|| abort "Error resetting to '$REMOTE_NAME/$REMOTE_BRANCH'."
 
-		log "Resetting to '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH'..."
-		git reset --hard "$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH" \
-			|| abort "Error resetting to '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH'."
-
-		# Non-interactive rebase on default branch
+		# Rebase on the inferred base branch
 		local BASE_BRANCH
-		BASE_BRANCH="$(get_base_branch)"
+		BASE_BRANCH="$(get_base_branch "$BRANCH_NAME")"
 
 		# Fetch the base branch first
 		local BASE_REMOTE
@@ -182,21 +163,21 @@ function get_branch() {
 		fi
 
 	else
-		# Branch doesn't exist - create from remote's default branch
-		log "Branch '$BRANCH_NAME' doesn't exist locally, creating from '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH'..."
+		# Branch doesn't exist - create from the remote's checked-out branch
+		log "Branch '$BRANCH_NAME' doesn't exist locally, creating from '$REMOTE_NAME/$REMOTE_BRANCH'..."
 
-		# Create branch from remote's default branch without setting up tracking
-		git switch -c "$BRANCH_NAME" --no-track "$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH" \
-			|| abort "Error while creating branch '$BRANCH_NAME' from '$REMOTE_NAME/$REMOTE_DEFAULT_BRANCH'."
+		# Create branch from the remote's checked-out branch without setting up tracking
+		git switch -c "$BRANCH_NAME" --no-track "$REMOTE_NAME/$REMOTE_BRANCH" \
+			|| abort "Error while creating branch '$BRANCH_NAME' from '$REMOTE_NAME/$REMOTE_BRANCH'."
 
-		# Rebase on upstream/main or origin/main
+		# Rebase on the inferred base branch
 		local BASE_BRANCH
-		BASE_BRANCH="$(get_base_branch)"
+		BASE_BRANCH="$(get_base_branch "$BRANCH_NAME")"
 
 		# Fetch the base branch first
 		local BASE_REMOTE
 		BASE_REMOTE=$(echo "$BASE_BRANCH" | cut -d/ -f1)
-		local BASE_BRANCH_NAMEPushin
+		local BASE_BRANCH_NAME
 		BASE_BRANCH_NAME=$(echo "$BASE_BRANCH" | cut -d/ -f2)
 		git fetch "$BASE_REMOTE" "$BASE_BRANCH_NAME" \
 			|| abort "Error fetching '$BASE_BRANCH'."
@@ -214,7 +195,7 @@ function get_branch() {
 	fi
 
 	# Push the result back to the source remote if there are changes
-	push_to_isx_remote "$REMOTE_NAME" "$BRANCH_NAME" "$REMOTE_DEFAULT_BRANCH"
+	push_to_isx_remote "$REMOTE_NAME" "$REMOTE_BRANCH"
 
 	log "Successfully checked out and rebased branch '$BRANCH_NAME'."
 }
@@ -233,10 +214,10 @@ function put_branch() {
 	log "Fetching remote '$REMOTE_NAME'..."
 	git fetch -p "$REMOTE_NAME"
 
-	local REMOTE_DEFAULT_BRANCH
-	REMOTE_DEFAULT_BRANCH="$(get_remote_default_branch "$REMOTE_NAME")"
+	local REMOTE_BRANCH
+	REMOTE_BRANCH="$(get_remote_checked_out_branch "$REMOTE_NAME")"
 
-	push_to_isx_remote "$REMOTE_NAME" "$BRANCH_NAME" "$REMOTE_DEFAULT_BRANCH"
+	push_to_isx_remote "$REMOTE_NAME" "$REMOTE_BRANCH"
 
 	log "Successfully pushed branch '$BRANCH_NAME'."
 }
