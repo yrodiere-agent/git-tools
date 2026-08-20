@@ -89,6 +89,38 @@ then
 		FORK_REMOTE=origin
 		log "Automatically setting up the upstream remote ('$UPSTREAM_REMOTE') and the fork remote ('$FORK_REMOTE')."
 		setup "$UPSTREAM_REMOTE" "$FORK_REMOTE"
+	elif git remote | grep -E '^origin$' 1>/dev/null 2>&1
+	then
+		ORIGIN_URL=$(git remote get-url origin)
+		if [[ "$ORIGIN_URL" =~ github\.com[:/]([^/]+)/([^/.]+)(\.git)?$ ]]
+		then
+			REPO_OWNER="${BASH_REMATCH[1]}"
+			REPO_NAME="${BASH_REMATCH[2]}"
+			REPO_INFO=$(gh api "repos/$REPO_OWNER/$REPO_NAME" 2>/dev/null || true)
+			if [ -n "$REPO_INFO" ] && echo "$REPO_INFO" | jq -e '.fork' >/dev/null 2>&1
+			then
+				if [[ "$ORIGIN_URL" =~ ^git@ ]]
+				then
+					PARENT_URL=$(echo "$REPO_INFO" | jq -r '.parent.ssh_url')
+				else
+					PARENT_URL=$(echo "$REPO_INFO" | jq -r '.parent.clone_url')
+				fi
+				log "'origin' is a fork. Adding upstream remote from parent repository..."
+				git remote add upstream "$PARENT_URL"
+				git fetch upstream
+				UPSTREAM_REMOTE=upstream
+				FORK_REMOTE=origin
+				log "Automatically setting up the upstream remote ('$UPSTREAM_REMOTE') and the fork remote ('$FORK_REMOTE')."
+				setup "$UPSTREAM_REMOTE" "$FORK_REMOTE"
+			else
+				UPSTREAM_REMOTE=origin
+				FORK_REMOTE=origin
+				log "Automatically setting up with 'origin' as both upstream and fork remote."
+				setup "$UPSTREAM_REMOTE" "$FORK_REMOTE"
+			fi
+		else
+			abort "Cannot auto-detect fork setup for non-GitHub remotes. Use 'git fork setup <upstream-remote> <fork-remote>' first."
+		fi
 	else
 		abort "Use 'git fork setup <upstream-remote> <fork-remote>' first."
 	fi
