@@ -11,4 +11,9 @@ fi
 SOURCE_REMOTE=$(git fork get upstream.remote)
 TARGET_REMOTE=$(git fork get remote)
 
+if [ "$SOURCE_REMOTE" = "$TARGET_REMOTE" ]
+then
+	abort "Upstream and fork are the same remote ('$SOURCE_REMOTE'). Nothing to sync."
+fi
+
 git remote-sync "$SOURCE_REMOTE" "$TARGET_REMOTE"
