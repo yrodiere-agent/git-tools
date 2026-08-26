@@ -92,7 +92,7 @@ then
 	elif git remote | grep -E '^origin$' 1>/dev/null 2>&1
 	then
 		ORIGIN_URL=$(git remote get-url origin)
-		if [[ "$ORIGIN_URL" =~ github\.com[:/]([^/]+)/([^/.]+)(\.git)?$ ]]
+		if [[ "$ORIGIN_URL" =~ github\.com[:/]([^/]+)/([^/.]+)(\.git)?/?$ ]]
 		then
 			REPO_OWNER="${BASH_REMATCH[1]}"
 			REPO_NAME="${BASH_REMATCH[2]}"
@@ -105,10 +105,24 @@ then
 				else
 					PARENT_URL=$(echo "$REPO_INFO" | jq -r '.parent.clone_url')
 				fi
-				log "'origin' is a fork. Adding upstream remote from parent repository..."
-				git remote add upstream "$PARENT_URL"
-				git fetch upstream
-				UPSTREAM_REMOTE=upstream
+				PARENT_URL_LOWER=$(echo "$PARENT_URL" | tr '[:upper:]' '[:lower:]')
+				EXISTING_UPSTREAM=""
+				for _remote in $(git remote); do
+					_url=$(git remote get-url "$_remote")
+					if [ "$(echo "$_url" | tr '[:upper:]' '[:lower:]')" = "$PARENT_URL_LOWER" ]; then
+						EXISTING_UPSTREAM="$_remote"
+						break
+					fi
+				done
+				if [ -n "$EXISTING_UPSTREAM" ]; then
+					log "'origin' is a fork. Using existing remote '$EXISTING_UPSTREAM' as upstream."
+					UPSTREAM_REMOTE="$EXISTING_UPSTREAM"
+				else
+					log "'origin' is a fork. Adding upstream remote from parent repository..."
+					git remote add upstream "$PARENT_URL"
+					git fetch upstream
+					UPSTREAM_REMOTE=upstream
+				fi
 				FORK_REMOTE=origin
 				log "Automatically setting up the upstream remote ('$UPSTREAM_REMOTE') and the fork remote ('$FORK_REMOTE')."
 				setup "$UPSTREAM_REMOTE" "$FORK_REMOTE"
