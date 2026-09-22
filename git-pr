@@ -229,7 +229,7 @@ function diff_pr() {
 		# No force-push: old head is in new history, just show what's new
 		local UPSTREAM_URL
 		UPSTREAM_URL="$(git fork get upstream.url.http)"
-		local GITHUB_URL="$UPSTREAM_URL/compare/$OLD_HEAD...$NEW_HEAD"
+		local GITHUB_URL="$UPSTREAM_URL/pull/$PR_NUMBER/changes/$OLD_HEAD..$NEW_HEAD"
 		GIT_PAGER="awk 'BEGIN{print \"# GitHub: ${GITHUB_URL}\"; print \"\"}{print}' | $(git var GIT_PAGER)" \
 			git diff "$OLD_HEAD" "$NEW_HEAD" "${@}"
 	else
