@@ -221,31 +221,37 @@ function diff_pr() {
 		fi
 	fi
 
-	# Detect target branch
-	local TARGET
-	if [ -n "$TARGET_BRANCH" ]
-	then
-		TARGET=$(git rev-parse --verify "$TARGET_BRANCH^{commit}" 2>/dev/null) \
-			|| abort "Cannot resolve target branch '$TARGET_BRANCH'."
-	else
-		local UPSTREAM_HEAD
-		UPSTREAM_HEAD="$(git fork get upstream.branch.head.relative)"
-		TARGET=$(git rev-parse --verify "$UPSTREAM_REMOTE/$UPSTREAM_HEAD^{commit}" 2>/dev/null) \
-			|| abort "Cannot resolve target branch '$UPSTREAM_REMOTE/$UPSTREAM_HEAD'. Try specifying --target."
-	fi
-
-	# Compute merge bases and run range-diff
-	local OLD_BASE NEW_BASE
-	OLD_BASE=$(git merge-base "$TARGET" "$OLD_HEAD") \
-		|| abort "Cannot find merge-base between target and old head."
-	NEW_BASE=$(git merge-base "$TARGET" "$NEW_HEAD") \
-		|| abort "Cannot find merge-base between target and new head."
-
 	log "Old: $(git log -1 --format='%h %s' "$OLD_HEAD")"
 	log "New: $(git log -1 --format='%h %s' "$NEW_HEAD")"
-	log "Target: $(git log -1 --format='%h %s' "$TARGET")"
 
-	git range-diff --creation-factor=200 "$OLD_BASE..$OLD_HEAD" "$NEW_BASE..$NEW_HEAD" "${@}"
+	if git merge-base --is-ancestor "$OLD_HEAD" "$NEW_HEAD"
+	then
+		# No force-push: old head is in new history, just show what's new
+		git diff "$OLD_HEAD" "$NEW_HEAD" "${@}"
+	else
+		# Force-push (likely rebase): compare patches via range-diff
+		local TARGET
+		if [ -n "$TARGET_BRANCH" ]
+		then
+			TARGET=$(git rev-parse --verify "$TARGET_BRANCH^{commit}" 2>/dev/null) \
+				|| abort "Cannot resolve target branch '$TARGET_BRANCH'."
+		else
+			local UPSTREAM_HEAD
+			UPSTREAM_HEAD="$(git fork get upstream.branch.head.relative)"
+			TARGET=$(git rev-parse --verify "$UPSTREAM_REMOTE/$UPSTREAM_HEAD^{commit}" 2>/dev/null) \
+				|| abort "Cannot resolve target branch '$UPSTREAM_REMOTE/$UPSTREAM_HEAD'. Try specifying --target."
+		fi
+
+		log "Target: $(git log -1 --format='%h %s' "$TARGET")"
+
+		local OLD_BASE NEW_BASE
+		OLD_BASE=$(git merge-base "$TARGET" "$OLD_HEAD") \
+			|| abort "Cannot find merge-base between target and old head."
+		NEW_BASE=$(git merge-base "$TARGET" "$NEW_HEAD") \
+			|| abort "Cannot find merge-base between target and new head."
+
+		git range-diff --creation-factor=200 "$OLD_BASE..$OLD_HEAD" "$NEW_BASE..$NEW_HEAD" "${@}"
+	fi
 }
 
 function get_pr() {
