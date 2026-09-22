@@ -227,6 +227,9 @@ function diff_pr() {
 	if git merge-base --is-ancestor "$OLD_HEAD" "$NEW_HEAD"
 	then
 		# No force-push: old head is in new history, just show what's new
+		local UPSTREAM_URL
+		UPSTREAM_URL="$(git fork get upstream.url.http)"
+		log "GitHub: $UPSTREAM_URL/compare/$OLD_HEAD...$NEW_HEAD"
 		git diff "$OLD_HEAD" "$NEW_HEAD" "${@}"
 	else
 		# Force-push (likely rebase): compare patches via range-diff
